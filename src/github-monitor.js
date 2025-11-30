@@ -36,7 +36,7 @@ async function fetchReadme() {
 }
 
 /**
- * Parse markdown table to extract internship listings from all sections
+ * Parse HTML table to extract internship listings from all sections
  */
 function parseInternshipListings(readmeContent) {
   const listings = [];
@@ -50,43 +50,88 @@ function parseInternshipListings(readmeContent) {
     { pattern: /## 🔧 Hardware Engineering[\s\S]*?(?=## |$)/, category: '🔧 Hardware Engineering', emoji: '🔧' },
   ];
   
-  // Match table rows - handles multiple formats:
-  // | **[Company](link)** | Role | Location | [Apply](link) [Simplify](link) | Age |
-  // | **Company** | Role | Location | [Apply](link) | Age |
-  // The regex captures the entire application column to parse links from it
-  const tableRowRegex = /\|\s*\*\*\[?([^\]]+)\]?\(?[^\)]*\)?\*\*\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|/g;
-  
   for (const section of sectionPatterns) {
     const sectionMatch = readmeContent.match(section.pattern);
     if (!sectionMatch) {
+      console.log(`⚠️ Section not found: ${section.category}`);
       continue;
     }
     
     const sectionContent = sectionMatch[0];
-    let match;
     
-    while ((match = tableRowRegex.exec(sectionContent)) !== null) {
-      const company = match[1].trim();
-      const role = match[2].trim();
-      const location = match[3].trim();
-      const applicationColumn = match[4].trim();
-      const age = match[5].trim();
+    // Find the table in this section
+    const tableMatch = sectionContent.match(/<table>[\s\S]*?<\/table>/);
+    if (!tableMatch) {
+      console.log(`⚠️ Table not found in section: ${section.category}`);
+      continue;
+    }
+    
+    const tableContent = tableMatch[0];
+    console.log(`✅ Found table for ${section.category}`);
+    
+    // Match table rows: <tr>...</tr>
+    const rowRegex = /<tr>[\s\S]*?<\/tr>/g;
+    let rowMatch;
+    
+    while ((rowMatch = rowRegex.exec(tableContent)) !== null) {
+      const rowContent = rowMatch[0];
+      
+      // Skip header row
+      if (rowContent.includes('<th>')) {
+        continue;
+      }
+      
+      // Extract table cells: <td>...</td>
+      const cellRegex = /<td>([\s\S]*?)<\/td>/g;
+      const cells = [];
+      let cellMatch;
+      
+      while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+        cells.push(cellMatch[1].trim());
+      }
+      
+      // Should have 5 cells: Company, Role, Location, Application, Age
+      if (cells.length < 5) {
+        continue;
+      }
+      
+      // Extract company name (from <strong><a>Company</a></strong> or <strong>Company</strong>)
+      let company = cells[0]
+        .replace(/<[^>]+>/g, '') // Remove all HTML tags
+        .trim();
+      
+      // Extract role (remove HTML tags)
+      let role = cells[1]
+        .replace(/<[^>]+>/g, '')
+        .trim();
+      
+      // Extract location (handle details/summary tags)
+      let location = cells[2]
+        .replace(/<details>[\s\S]*?<summary>[\s\S]*?<\/summary>[\s\S]*?<\/details>/g, '') // Remove details blocks
+        .replace(/<[^>]+>/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      
+      // Extract application links from the application column
+      const applicationColumn = cells[3];
       
       // Skip closed applications (marked with 🔒)
       if (applicationColumn.includes('🔒') || role.includes('🔒') || company.includes('🔒')) {
         continue;
       }
       
-      // Extract Apply link (prefer Apply over Simplify)
+      // Extract Apply link from <a href="..." alt="Apply">
       let applyLink = null;
-      const applyMatch = applicationColumn.match(/\[Apply\]\(([^\)]+)\)/);
+      const applyLinkRegex = /<a\s+href="([^"]+)"[^>]*alt="Apply"/i;
+      const applyMatch = applicationColumn.match(applyLinkRegex);
       if (applyMatch) {
         applyLink = applyMatch[1].trim();
       } else {
-        // Fallback to Simplify link if no Apply link
-        const simplifyMatch = applicationColumn.match(/\[Simplify\]\(([^\)]+)\)/);
-        if (simplifyMatch) {
-          applyLink = simplifyMatch[1].trim();
+        // Fallback: try to find any link with "Apply" in alt or text
+        const anyApplyLinkRegex = /<a\s+href="([^"]+)"[^>]*>[\s\S]*?Apply/i;
+        const anyApplyMatch = applicationColumn.match(anyApplyLinkRegex);
+        if (anyApplyMatch) {
+          applyLink = anyApplyMatch[1].trim();
         }
       }
       
@@ -94,6 +139,14 @@ function parseInternshipListings(readmeContent) {
       if (!applyLink || applyLink === '🔒') {
         continue;
       }
+      
+      // Extract age (remove HTML tags)
+      let age = cells[4]
+        .replace(/<[^>]+>/g, '')
+        .trim();
+      
+      // Clean up location (remove <br> tags and normalize)
+      location = location.replace(/<br\s*\/?>/gi, ', ').replace(/\s+/g, ' ').trim();
       
       listings.push({
         company,
@@ -106,8 +159,11 @@ function parseInternshipListings(readmeContent) {
         id: `${company}-${role}-${location}`.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase(),
       });
     }
+    
+    console.log(`📊 Parsed ${listings.filter(l => l.category === section.category).length} listings from ${section.category}`);
   }
   
+  console.log(`✅ Total listings parsed: ${listings.length}`);
   return listings;
 }
 
