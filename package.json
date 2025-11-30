@@ -1,0 +1,25 @@
+{
+  "name": "internship-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot that monitors GitHub repository for new internship listings",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "internship",
+    "github"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.3.1"
+  }
+}
+

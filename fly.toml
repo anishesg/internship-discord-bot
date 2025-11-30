@@ -1,0 +1,19 @@
+# fly.toml app configuration file for internship-discord-bot
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+
+app = "internship-discord-bot"
+primary_region = "iad"
+
+[build]
+
+[env]
+  NODE_ENV = "production"
+
+# Discord bots don't need HTTP services, just run as a process
+[processes]
+  app = "node src/index.js"
+
+# Keep the machine running (don't auto-stop)
+[deploy]
+  strategy = "immediate"
+

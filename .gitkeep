@@ -1,0 +1,3 @@
+# This file ensures the data directory is tracked in git
+# The actual data files (applications.json, seen-listings.json) should be in .gitignore
+
