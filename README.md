@@ -78,6 +78,25 @@ Edit `.env` to customize:
 - `GITHUB_BRANCH`: Which branch to monitor (default: `dev`)
 - `TRACKING_FILE`: Where to store application tracking data
 
+## Commands
+
+### Slash Commands
+- `/check` - Manually check for new listings
+- `/stats` - Show bot statistics
+
+### Message Commands (use `?` prefix)
+- `?today` - Show all internships posted today
+- `?recent [days]` - Show recent internships (default: 7 days)
+  - Example: `?recent 3` - shows last 3 days
+- `?search <query>` - Search internships by company, role, or location
+  - Example: `?search google` or `?search software engineer`
+- `?category <name>` - Filter by category
+  - Categories: `software`, `product`, `data`, `quant`, `hardware`
+  - Example: `?category software` or `?category data`
+- `?myapplications` - View all internships you've marked as applied
+- `?stats` - Show statistics about all internships
+- `?help` - Show all available commands
+
 ## Application Tracking
 
 When you click the "I Applied" button:

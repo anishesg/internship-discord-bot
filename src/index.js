@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilde
 import dotenv from 'dotenv';
 import { monitorRepository, checkForUpdates } from './github-monitor.js';
 import { handleInteraction } from './interactions.js';
+import { handleMessageCommand } from './commands.js';
 
 dotenv.config();
 
@@ -87,6 +88,15 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
   }
+});
+
+// Handle message-based commands (e.g., ?today, ?search)
+client.on('messageCreate', async (message) => {
+  // Ignore messages from bots
+  if (message.author.bot) return;
+  
+  // Handle commands
+  await handleMessageCommand(message);
 });
 
 client.login(process.env.DISCORD_TOKEN).catch((error) => {

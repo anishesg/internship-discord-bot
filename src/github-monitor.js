@@ -243,6 +243,20 @@ export async function monitorRepository(client, channelId) {
 }
 
 /**
+ * Get all current listings from GitHub
+ * Exported for use in commands
+ */
+export async function getAllListings() {
+  try {
+    const readmeContent = await fetchReadme();
+    return parseInternshipListings(readmeContent);
+  } catch (error) {
+    console.error('❌ Error fetching listings:', error);
+    throw error;
+  }
+}
+
+/**
  * Check for updates and send new listings
  * Exported for use in slash commands
  */
