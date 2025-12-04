@@ -3,6 +3,9 @@ import { getAllListings } from './github-monitor.js';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { parseTasks } from './llm-parser.js';
+import { getUserTasks, setUserTasks, completeTask, uncompleteTask, getUser, updateUser, getAllUsers } from './database.js';
+import { createLeaderboardEmbed, createTeamLeaderboardEmbed, createProfileEmbed } from './gamification.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -458,19 +461,434 @@ export async function handleHelpCommand(message) {
     .setTitle('📚 Command Help')
     .setDescription('Here are all available commands:')
     .addFields(
-      { name: '`?today`', value: 'Show all internships posted today', inline: false },
-      { name: '`?recent [days]`', value: 'Show recent internships (default: 7 days)', inline: false },
-      { name: '`?search <query>`', value: 'Search internships by company, role, or location', inline: false },
-      { name: '`?category <name>`', value: 'Filter by category (software, product, data, quant, hardware)', inline: false },
-      { name: '`?myapplications`', value: 'View all internships you\'ve marked as applied', inline: false },
-      { name: '`?stats`', value: 'Show statistics about all internships', inline: false },
-      { name: '`?help`', value: 'Show this help message', inline: false }
+      { name: '📋 Task Management', value: '`?tasks set` - Set your tasks for today\n`?tasks view` - View your tasks\n`?done <id>` - Mark task as complete\n`?undo <id>` - Unmark task', inline: false },
+      { name: '🏆 Leaderboards', value: '`?leaderboard [today|week|season|internship|streak]` - View leaderboards\n`?profile` - View your profile\n`?streak` - View your streak', inline: false },
+      { name: '👥 Teams', value: '`?team join <name>` - Join a team\n`?team leave` - Leave your team\n`?team stats` - View team stats', inline: false },
+      { name: '💼 Internships', value: '`?today` - Show internships posted today\n`?recent [days]` - Show recent internships\n`?search <query>` - Search internships\n`?category <name>` - Filter by category\n`?myapplications` - View your applications', inline: false },
+      { name: '📊 Other', value: '`?stats` - Show internship statistics\n`?help` - Show this help message', inline: false }
     )
     .setColor(0x5865F2)
     .setTimestamp()
     .setFooter({ text: 'Tip: Click "I Applied" buttons to track your applications!' });
   
   await message.reply({ embeds: [embed] });
+}
+
+/**
+ * Handle ?tasks set command
+ */
+export async function handleTasksSetCommand(message) {
+  try {
+    const userId = message.author.id;
+    const username = message.author.username;
+    
+    // Get the task text from the message (everything after ?tasks set)
+    const content = message.content.trim();
+    const taskText = content.replace(/^\?tasks\s+set\s*/i, '').trim();
+    
+    if (!taskText || taskText.length === 0) {
+      return await message.reply('❌ Please provide your tasks. Usage: `?tasks set <your tasks here>`\n\nExample:\n`?tasks set\n- Apply to 3 SWE internships\n- Finish DS homework\n- Study LC for 1 hour`');
+    }
+    
+    await message.channel.sendTyping();
+    
+    // Parse tasks using LLM
+    const tasks = await parseTasks(taskText);
+    
+    if (tasks.length === 0) {
+      return await message.reply('❌ Could not parse any tasks. Please try again with a clearer format.');
+    }
+    
+    // Save tasks
+    const today = new Date().toISOString().split('T')[0];
+    await setUserTasks(userId, today, tasks);
+    await getUser(userId, username); // Ensure user exists
+    
+    // Create embed
+    const totalPoints = tasks.reduce((sum, t) => sum + t.points, 0);
+    const tasksList = tasks.map((t, i) => 
+      `${i + 1}. ${t.description} — **${t.points} pts** (${t.category})`
+    ).join('\n');
+    
+    const embed = new EmbedBuilder()
+      .setTitle(`📋 Your Tasks for ${today}`)
+      .setDescription(tasksList)
+      .addFields(
+        { name: '📊 Total Possible Today', value: `${totalPoints} pts`, inline: true },
+        { name: '✅ Completed', value: '0 / ' + tasks.length, inline: true }
+      )
+      .setColor(0x5865F2)
+      .setTimestamp();
+    
+    // Add reaction buttons for each task
+    const reply = await message.reply({ embeds: [embed] });
+    
+    // Add checkmark reactions for each task
+    for (let i = 0; i < Math.min(tasks.length, 10); i++) {
+      await reply.react(`${i + 1}️⃣`);
+    }
+    await reply.react('✅');
+    
+    // Store message ID for reaction handling
+    const taskMessageId = reply.id;
+    // We'll handle reactions in interactions.js
+    
+  } catch (error) {
+    console.error('Error in ?tasks set command:', error);
+    await message.reply('❌ Error setting tasks. Please try again.');
+  }
+}
+
+/**
+ * Handle ?tasks view command
+ */
+export async function handleTasksViewCommand(message) {
+  try {
+    const userId = message.author.id;
+    const today = new Date().toISOString().split('T')[0];
+    
+    const tasks = await getUserTasks(userId, today);
+    
+    if (tasks.length === 0) {
+      const embed = new EmbedBuilder()
+        .setTitle('📋 Your Tasks')
+        .setDescription('You haven\'t set any tasks for today. Use `?tasks set` to add tasks!')
+        .setColor(0xFEE75C)
+        .setTimestamp();
+      
+      return await message.reply({ embeds: [embed] });
+    }
+    
+    const completed = tasks.filter(t => t.completed).length;
+    const totalPoints = tasks.reduce((sum, t) => sum + (t.completed ? t.points : 0), 0);
+    const possiblePoints = tasks.reduce((sum, t) => sum + t.points, 0);
+    
+    const tasksList = tasks.map((t, i) => {
+      const status = t.completed ? '✅' : '⏳';
+      return `${status} ${i + 1}. ${t.description} — **${t.points} pts** (${t.category})`;
+    }).join('\n');
+    
+    const embed = new EmbedBuilder()
+      .setTitle(`📋 Your Tasks for ${today}`)
+      .setDescription(tasksList)
+      .addFields(
+        { name: '📊 Progress', value: `${totalPoints} / ${possiblePoints} pts`, inline: true },
+        { name: '✅ Completed', value: `${completed} / ${tasks.length}`, inline: true }
+      )
+      .setColor(0x57F287)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?tasks view command:', error);
+    await message.reply('❌ Error viewing tasks. Please try again.');
+  }
+}
+
+/**
+ * Handle ?done command
+ */
+export async function handleDoneCommand(message, taskId) {
+  try {
+    const userId = message.author.id;
+    const username = message.author.username;
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (!taskId) {
+      return await message.reply('❌ Please specify a task ID. Usage: `?done <task_number>`\nExample: `?done 1`');
+    }
+    
+    const taskNum = parseInt(taskId);
+    if (isNaN(taskNum) || taskNum < 1) {
+      return await message.reply('❌ Invalid task number. Please use a number like 1, 2, 3, etc.');
+    }
+    
+    const tasks = await getUserTasks(userId, today);
+    
+    if (tasks.length === 0) {
+      return await message.reply('❌ You don\'t have any tasks set for today. Use `?tasks set` to add tasks!');
+    }
+    
+    if (taskNum > tasks.length) {
+      return await message.reply(`❌ Task ${taskNum} doesn't exist. You have ${tasks.length} task(s).`);
+    }
+    
+    const task = tasks[taskNum - 1];
+    
+    if (task.completed) {
+      return await message.reply(`✅ Task ${taskNum} is already completed!`);
+    }
+    
+    const completedTask = await completeTask(userId, today, task.id);
+    
+    if (!completedTask) {
+      return await message.reply('❌ Error completing task. Please try again.');
+    }
+    
+    const user = await getUser(userId, username);
+    const streakBonus = user.streakDays > 0 ? Math.min(20, user.streakDays * 2) : 0;
+    
+    const embed = new EmbedBuilder()
+      .setTitle('✅ Task Completed!')
+      .setDescription(`**${task.description}** — +${task.points} pts`)
+      .addFields(
+        { name: '📊 Today\'s Points', value: `${user.todayPoints} pts`, inline: true },
+        { name: '🔥 Streak', value: `${user.streakDays} days`, inline: true }
+      )
+      .setColor(0x57F287)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?done command:', error);
+    await message.reply('❌ Error completing task. Please try again.');
+  }
+}
+
+/**
+ * Handle ?undo command
+ */
+export async function handleUndoCommand(message, taskId) {
+  try {
+    const userId = message.author.id;
+    const today = new Date().toISOString().split('T')[0];
+    
+    if (!taskId) {
+      return await message.reply('❌ Please specify a task ID. Usage: `?undo <task_number>`');
+    }
+    
+    const taskNum = parseInt(taskId);
+    if (isNaN(taskNum) || taskNum < 1) {
+      return await message.reply('❌ Invalid task number.');
+    }
+    
+    const tasks = await getUserTasks(userId, today);
+    
+    if (taskNum > tasks.length) {
+      return await message.reply(`❌ Task ${taskNum} doesn't exist.`);
+    }
+    
+    const task = tasks[taskNum - 1];
+    
+    if (!task.completed) {
+      return await message.reply(`❌ Task ${taskNum} is not completed.`);
+    }
+    
+    await uncompleteTask(userId, today, task.id);
+    
+    const user = await getUser(userId);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('↩️ Task Unmarked')
+      .setDescription(`**${task.description}** — -${task.points} pts`)
+      .addFields(
+        { name: '📊 Today\'s Points', value: `${user.todayPoints} pts`, inline: true }
+      )
+      .setColor(0xFEE75C)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?undo command:', error);
+    await message.reply('❌ Error unmarking task. Please try again.');
+  }
+}
+
+/**
+ * Handle ?leaderboard command
+ */
+export async function handleLeaderboardCommand(message, type = 'today') {
+  try {
+    const validTypes = ['today', 'week', 'season', 'internship', 'streak'];
+    
+    if (type && !validTypes.includes(type.toLowerCase())) {
+      return await message.reply(`❌ Invalid leaderboard type. Use: ${validTypes.join(', ')}`);
+    }
+    
+    const embed = await createLeaderboardEmbed(type.toLowerCase() || 'today', 10);
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?leaderboard command:', error);
+    await message.reply('❌ Error fetching leaderboard. Please try again.');
+  }
+}
+
+/**
+ * Handle ?profile command
+ */
+export async function handleProfileCommand(message) {
+  try {
+    const userId = message.author.id;
+    const username = message.author.username;
+    
+    const embed = await createProfileEmbed(userId, username);
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?profile command:', error);
+    await message.reply('❌ Error fetching profile. Please try again.');
+  }
+}
+
+/**
+ * Handle ?streak command
+ */
+export async function handleStreakCommand(message) {
+  try {
+    const userId = message.author.id;
+    const username = message.author.username;
+    const user = await getUser(userId, username);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('🔥 Your Streak')
+      .setDescription(`**${user.streakDays || 0}** consecutive days with ≥10 points!`)
+      .addFields(
+        { name: '📅 Last Active', value: user.lastActiveDate || 'Never', inline: true },
+        { name: '💪 Keep it up!', value: 'Maintain your streak by completing tasks daily', inline: false }
+      )
+      .setColor(0xFF6B6B)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?streak command:', error);
+    await message.reply('❌ Error fetching streak. Please try again.');
+  }
+}
+
+/**
+ * Handle ?team join command
+ */
+export async function handleTeamJoinCommand(message, teamName) {
+  try {
+    if (!teamName || teamName.trim().length === 0) {
+      return await message.reply('❌ Please specify a team name. Usage: `?team join <team_name>`');
+    }
+    
+    const userId = message.author.id;
+    const username = message.author.username;
+    
+    // Create team ID from name (lowercase, no spaces)
+    const teamId = teamName.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    
+    const { createTeam, addUserToTeam, getTeam } = await import('./database.js');
+    
+    // Check if team exists, create if not
+    let team = await getTeam(teamId);
+    if (!team) {
+      team = await createTeam(teamId, teamName, userId);
+      if (!team) {
+        return await message.reply('❌ Error creating team. Please try again.');
+      }
+    } else {
+      // Add user to existing team
+      team = await addUserToTeam(userId, teamId);
+      if (!team) {
+        return await message.reply('❌ Error joining team. Please try again.');
+      }
+    }
+    
+    const embed = new EmbedBuilder()
+      .setTitle('👥 Team Joined!')
+      .setDescription(`You've joined **${team.name}**!`)
+      .addFields(
+        { name: '👥 Members', value: `${team.members.length}`, inline: true },
+        { name: '📊 Team Points', value: `${team.weeklyPoints || 0} pts (this week)`, inline: true }
+      )
+      .setColor(0x5865F2)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?team join command:', error);
+    await message.reply('❌ Error joining team. Please try again.');
+  }
+}
+
+/**
+ * Handle ?team leave command
+ */
+export async function handleTeamLeaveCommand(message) {
+  try {
+    const userId = message.author.id;
+    const { removeUserFromTeam, getUser } = await import('./database.js');
+    
+    const user = await getUser(userId);
+    
+    if (!user.teamId) {
+      return await message.reply('❌ You are not in a team.');
+    }
+    
+    await removeUserFromTeam(userId);
+    
+    const embed = new EmbedBuilder()
+      .setTitle('👥 Left Team')
+      .setDescription('You have left your team.')
+      .setColor(0xFEE75C)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?team leave command:', error);
+    await message.reply('❌ Error leaving team. Please try again.');
+  }
+}
+
+/**
+ * Handle ?team stats command
+ */
+export async function handleTeamStatsCommand(message) {
+  try {
+    const userId = message.author.id;
+    const { getUser, loadTeams } = await import('./database.js');
+    
+    const user = await getUser(userId);
+    
+    if (!user.teamId) {
+      return await message.reply('❌ You are not in a team. Join one with `?team join <name>`');
+    }
+    
+    const teams = await loadTeams();
+    const team = teams[user.teamId];
+    
+    if (!team) {
+      return await message.reply('❌ Your team was not found.');
+    }
+    
+    // Calculate team points
+    const users = await getAllUsers();
+    let weeklyPoints = 0;
+    let seasonPoints = 0;
+    
+    team.members.forEach(memberId => {
+      const member = users[memberId];
+      if (member) {
+        weeklyPoints += member.weeklyPoints || 0;
+        seasonPoints += member.seasonPoints || 0;
+      }
+    });
+    
+    const membersList = team.members
+      .map(memberId => {
+        const member = users[memberId];
+        return member ? `• ${member.username || memberId.slice(0, 8)} (${member.weeklyPoints || 0} pts)` : `• ${memberId.slice(0, 8)}`;
+      })
+      .join('\n');
+    
+    const embed = new EmbedBuilder()
+      .setTitle(`👥 Team: ${team.name}`)
+      .setDescription(`**Members:** ${team.members.length}`)
+      .addFields(
+        { name: '📊 Points', value: `**This Week:** ${weeklyPoints}\n**This Season:** ${seasonPoints}`, inline: true },
+        { name: '👥 Members', value: membersList || 'No members', inline: false }
+      )
+      .setColor(0x5865F2)
+      .setTimestamp();
+    
+    await message.reply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Error in ?team stats command:', error);
+    await message.reply('❌ Error fetching team stats. Please try again.');
+  }
 }
 
 /**
@@ -523,6 +941,50 @@ export async function handleMessageCommand(message) {
       case 'help':
       case 'commands':
         await handleHelpCommand(message);
+        break;
+      
+      case 'tasks':
+        if (commandArgs.toLowerCase().startsWith('set')) {
+          await handleTasksSetCommand(message);
+        } else if (commandArgs.toLowerCase().startsWith('view') || commandArgs.length === 0) {
+          await handleTasksViewCommand(message);
+        } else {
+          await message.reply('❌ Invalid tasks command. Use `?tasks set` or `?tasks view`');
+        }
+        break;
+      
+      case 'done':
+        await handleDoneCommand(message, commandArgs);
+        break;
+      
+      case 'undo':
+        await handleUndoCommand(message, commandArgs);
+        break;
+      
+      case 'leaderboard':
+      case 'lb':
+        await handleLeaderboardCommand(message, commandArgs);
+        break;
+      
+      case 'profile':
+        await handleProfileCommand(message);
+        break;
+      
+      case 'streak':
+        await handleStreakCommand(message);
+        break;
+      
+      case 'team':
+        if (commandArgs.toLowerCase().startsWith('join')) {
+          const teamName = commandArgs.replace(/^join\s+/i, '').trim();
+          await handleTeamJoinCommand(message, teamName);
+        } else if (commandArgs.toLowerCase().startsWith('leave')) {
+          await handleTeamLeaveCommand(message);
+        } else if (commandArgs.toLowerCase().startsWith('stats')) {
+          await handleTeamStatsCommand(message);
+        } else {
+          await message.reply('❌ Invalid team command. Use `?team join <name>`, `?team leave`, or `?team stats`');
+        }
         break;
       
       default:

@@ -2,6 +2,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { EmbedBuilder } from 'discord.js';
+import { getUserTasks, completeTask, uncompleteTask, getUser } from './database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -122,5 +123,133 @@ export async function handleInteraction(interaction, client) {
       });
     }
   }
+}
+
+/**
+ * Handle reaction-based task completion
+ */
+export async function handleReactionAdd(reaction, user) {
+  // Ignore bot reactions
+  if (user.bot) return;
+  
+  // Check if this is a task message (has task embed)
+  const message = reaction.message;
+  if (!message.embeds || message.embeds.length === 0) return;
+  
+  const embed = message.embeds[0];
+  if (!embed.title || !embed.title.includes('Your Tasks')) return;
+  
+  // Map emoji to task number
+  const emojiToNumber = {
+    '1️⃣': 1,
+    '2️⃣': 2,
+    '3️⃣': 3,
+    '4️⃣': 4,
+    '5️⃣': 5,
+    '6️⃣': 6,
+    '7️⃣': 7,
+    '8️⃣': 8,
+    '9️⃣': 9,
+    '🔟': 10,
+  };
+  
+  const emoji = reaction.emoji.name;
+  const taskNum = emojiToNumber[emoji];
+  
+  if (!taskNum) {
+    // Check for checkmark (mark all as done)
+    if (emoji === '✅') {
+      // Mark all incomplete tasks as done
+      const userId = user.id;
+      const today = new Date().toISOString().split('T')[0];
+      const tasks = await getUserTasks(userId, today);
+      
+      const incompleteTasks = tasks.filter(t => !t.completed);
+      if (incompleteTasks.length === 0) {
+        return;
+      }
+      
+      for (const task of incompleteTasks) {
+        await completeTask(userId, today, task.id);
+      }
+      
+      const userData = await getUser(userId, user.username);
+      await message.channel.send(`✅ ${user.username} completed all tasks! Total: ${userData.todayPoints} pts`);
+    }
+    return;
+  }
+  
+  // Complete the specific task
+  const userId = user.id;
+  const today = new Date().toISOString().split('T')[0];
+  const tasks = await getUserTasks(userId, today);
+  
+  if (taskNum > tasks.length) {
+    return;
+  }
+  
+  const task = tasks[taskNum - 1];
+  
+  if (task.completed) {
+    return; // Already completed
+  }
+  
+  const completedTask = await completeTask(userId, today, task.id);
+  
+  if (completedTask) {
+    const userData = await getUser(userId, user.username);
+    await message.channel.send(`✅ ${user.username} completed task ${taskNum}: **${task.description}** (+${task.points} pts)`);
+  }
+}
+
+/**
+ * Handle reaction removal (uncomplete task)
+ */
+export async function handleReactionRemove(reaction, user) {
+  // Ignore bot reactions
+  if (user.bot) return;
+  
+  // Check if this is a task message
+  const message = reaction.message;
+  if (!message.embeds || message.embeds.length === 0) return;
+  
+  const embed = message.embeds[0];
+  if (!embed.title || !embed.title.includes('Your Tasks')) return;
+  
+  const emojiToNumber = {
+    '1️⃣': 1,
+    '2️⃣': 2,
+    '3️⃣': 3,
+    '4️⃣': 4,
+    '5️⃣': 5,
+    '6️⃣': 6,
+    '7️⃣': 7,
+    '8️⃣': 8,
+    '9️⃣': 9,
+    '🔟': 10,
+  };
+  
+  const emoji = reaction.emoji.name;
+  const taskNum = emojiToNumber[emoji];
+  
+  if (!taskNum) return;
+  
+  // Uncomplete the task
+  const userId = user.id;
+  const today = new Date().toISOString().split('T')[0];
+  const tasks = await getUserTasks(userId, today);
+  
+  if (taskNum > tasks.length) {
+    return;
+  }
+  
+  const task = tasks[taskNum - 1];
+  
+  if (!task.completed) {
+    return; // Not completed
+  }
+  
+  await uncompleteTask(userId, today, task.id);
+  await message.channel.send(`↩️ ${user.username} unmarked task ${taskNum}: **${task.description}** (-${task.points} pts)`);
 }
 
